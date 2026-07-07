@@ -43,6 +43,13 @@ TYPE_INTERRUPT = "interrupt"
 TYPE_EFFECT = "effect"
 TYPE_REPORT = "report"
 
+# The stream is per-conversation, so there is exactly one logical current-run row.
+# It is keyed by this stable id (last-writer-wins) rather than the thread id, so the
+# frontend runtime — which looks the run row up by a fixed key — always binds it
+# (``isRunning`` / the streaming indicator). Must match the frontend's ``RUN_ROW_ID``
+# (@assistant-ui/react-durable-streams schema.ts).
+RUN_ROW_ID = "run"
+
 
 def change_event(
     *,

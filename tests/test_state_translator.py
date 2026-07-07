@@ -111,7 +111,9 @@ class TestRunLifecycle:
     async def test_empty_run_is_running_then_complete_then_closed(self):
         w = await _run()
         runs = [(k, v["status"]) for (op, t, k, v) in w.frames if t == TYPE_RUN and v]
-        assert runs == [("t", "running"), ("t", "complete")]
+        # The run row is keyed by the stable RUN_ROW_ID ("run"), not the thread id,
+        # so the frontend runtime's fixed-key lookup binds it.
+        assert runs == [("run", "running"), ("run", "complete")]
         # Every run row carries the enqueued run id (feedback attribution).
         assert all(
             v["runId"] == "r" for (op, t, k, v) in w.frames if t == TYPE_RUN and v
@@ -433,7 +435,7 @@ class TestInterrupts:
         # threadId stamps the row so the client filters the shared interrupts
         # collection by thread.
         assert row["threadId"] == "t"
-        assert w.last(TYPE_RUN, "t")["status"] == "interrupt"
+        assert w.last(TYPE_RUN, "run")["status"] == "interrupt"
         assert w.closed
 
     async def test_clear_interrupts_deletes_addressed_rows(self):

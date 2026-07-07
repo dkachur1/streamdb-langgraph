@@ -53,6 +53,7 @@ from streamdb_langgraph.interrupts import (
 from streamdb_langgraph.serialization import to_ag_ui_json, to_ag_ui_tool_name
 from streamdb_langgraph.state_projection import project_client_state
 from streamdb_langgraph.state_protocol import (
+    RUN_ROW_ID,
     TYPE_AGENT_STATE,
     TYPE_EFFECT,
     TYPE_INTERRUPT,
@@ -157,11 +158,17 @@ class StateTranslator:
         *,
         thread_id: str,
         run_id: str | None = None,
+        run_row_id: str = RUN_ROW_ID,
         summarization_message_id_prefix: str = SUMMARIZATION_MESSAGE_ID_PREFIX,
     ) -> None:
         self.writer = writer
         self.thread_id = thread_id
         self.run_id = run_id or f"run_{uuid.uuid4().hex}"
+        # The stream is per-conversation, so there is one logical current-run row;
+        # it is keyed by this stable id (LWW) so the frontend runtime — which reads
+        # the run row by a fixed key — binds ``isRunning``. Defaults to the shared
+        # ``RUN_ROW_ID`` ("run"); overridable only if a consumer keys it otherwise.
+        self.run_row_id = run_row_id
         self._summarization_prefix = summarization_message_id_prefix
         # Live messages continue after any history seeded ahead of the run
         # (set_ordinal_start), so message rows share one monotonic ordinal.
@@ -240,7 +247,7 @@ class StateTranslator:
 
     async def _set_run(self, status: str, *, interrupt: Any = None) -> None:
         value: dict[str, Any] = {
-            "id": self.thread_id,
+            "id": self.run_row_id,
             "threadId": self.thread_id,
             # The enqueued run id; the client reads it off this row to attribute
             # message feedback. Wired in at construction — never the fallback id.
@@ -249,7 +256,7 @@ class StateTranslator:
         }
         if interrupt is not None:
             value["interrupt"] = interrupt
-        await self.writer.upsert(TYPE_RUN, self.thread_id, value)
+        await self.writer.upsert(TYPE_RUN, self.run_row_id, value)
 
     async def emit_run_started(self) -> None:
         if self._run_started:

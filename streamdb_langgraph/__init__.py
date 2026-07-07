@@ -9,7 +9,11 @@ directly — no AG-UI lifecycle-event replay, no custom-event bus.
 
 from __future__ import annotations
 
-from streamdb_langgraph.driver import iter_state_rows, translate_run
+from streamdb_langgraph.driver import (
+    iter_state_rows,
+    translate_run,
+    translate_turn,
+)
 from streamdb_langgraph.history_replay import (
     SUMMARIZATION_MESSAGE_ID_PREFIX,
     next_live_order,
@@ -18,6 +22,7 @@ from streamdb_langgraph.history_replay import (
 )
 from streamdb_langgraph.state_projection import project_client_state
 from streamdb_langgraph.state_protocol import (
+    RUN_ROW_ID,
     Operation,
     StateWriterProtocol,
     change_event,
@@ -27,6 +32,7 @@ from streamdb_langgraph.stream import make_run_stream
 from streamdb_langgraph.writers import CollectingStateWriter, QueueStateWriter
 
 __all__ = [
+    "RUN_ROW_ID",
     "SUMMARIZATION_MESSAGE_ID_PREFIX",
     "CollectingStateWriter",
     "Operation",
@@ -41,4 +47,5 @@ __all__ = [
     "project_client_state",
     "replay_history",
     "translate_run",
+    "translate_turn",
 ]
