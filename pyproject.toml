@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "streamdb-langgraph"
+version = "0.1.0"
+description = "Translate LangGraph runs into durable State-Protocol row upserts for a StreamDB frontend"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Danylo Kachur" }]
+keywords = ["langgraph", "streamdb", "durable-streams", "state-protocol", "assistant-ui", "ag-ui"]
+dependencies = [
+    "ag-ui-protocol>=0.1.15",
+    "jsonpatch>=1.33",
+    "langchain-core>=1.4.0",
+    "langgraph>=1.2.0",
+    "pydantic-core>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "mypy>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/dkachur1/streamdb-langgraph"
+Repository = "https://github.com/dkachur1/streamdb-langgraph"
+
+[tool.hatch.build.targets.wheel]
+packages = ["streamdb_langgraph"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+disallow_untyped_defs = true
+warn_unused_ignores = true
+# LangGraph / langchain-core ship partial stubs; don't fail on their generics.
+ignore_missing_imports = true
+disallow_any_generics = false
+warn_return_any = false
