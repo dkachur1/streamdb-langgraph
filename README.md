@@ -177,6 +177,16 @@ the same ids merges idempotently.
   through `langchain.agents.create_agent` get it automatically.
 - The package produces frames; transporting them to a durable stream (and cold
   reseeding, offset management, retention) is the consumer's responsibility.
+- **Parallel-interrupt resume is bounded by a LangGraph limitation, not this
+  package.** LangGraph hashes an `interrupt()` id from the checkpoint namespace
+  alone, so multiple `interrupt()` calls from parallel tool calls in one
+  `ToolNode` can share a raw id
+  ([langchain-ai/langgraph#6626](https://github.com/langchain-ai/langgraph/issues/6626)).
+  `ag_ui_interrupt_rows` disambiguates the *rows* on a collision (keyed on
+  `toolCallId`) so no pending interrupt is silently dropped from the stream —
+  but routing a resume *answer* back to the correct one is a LangGraph-side fix,
+  since resume-value routing keys off the same colliding id upstream of this
+  translator.
 
 ## License
 

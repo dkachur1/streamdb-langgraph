@@ -191,14 +191,35 @@ def ag_ui_interrupt_rows(
     replay bridge (``history_replay``), and ``/history`` restore so all three
     project an open interrupt identically — ``threadId`` is the row's only
     routing key; the id falls back to a fresh token only when LangGraph supplied
-    none."""
+    none.
+
+    Disambiguates on a raw-id collision: LangGraph's ``interrupt()`` id is a hash
+    of the checkpoint namespace alone (no per-call index folded in), so multiple
+    ``interrupt()`` calls from parallel tool calls in the same ``ToolNode`` can
+    legitimately share one raw id
+    (see https://github.com/langchain-ai/langgraph/issues/6626). Upserting two
+    rows under the same key would silently drop one interrupt from the
+    collection (last-writer-wins), so a colliding row is re-keyed on its
+    ``toolCallId`` (unique per parallel call) — or an ordinal suffix, if even
+    that is missing — before it lands on the stream. This keeps every pending
+    interrupt visible; it does NOT by itself fix resuming them correctly, since
+    LangGraph's own resume-value routing keys off the same colliding raw id
+    upstream of this translator.
+    """
     rows: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}
     for interrupt in interrupts:
         item = langgraph_interrupt_to_ag_ui_interrupt(interrupt)
         if item is None:
             continue
         row: dict[str, Any] = dict(item)
         row.setdefault("id", f"interrupt_{uuid.uuid4().hex}")
+        raw_id = row["id"]
+        count = seen.get(raw_id, 0)
+        seen[raw_id] = count + 1
+        if count > 0:
+            disambiguator = row.get("toolCallId") or str(count)
+            row["id"] = f"{raw_id}:{disambiguator}"
         row["threadId"] = thread_id
         rows.append(row)
     return rows
