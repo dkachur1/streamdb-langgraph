@@ -9,9 +9,12 @@ wins, not open/close framing.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 from streamdb_langgraph.state_protocol import (
     TYPE_AGENT_STATE,
@@ -30,7 +33,9 @@ from tests.fixtures import (
     FakeMessage,
     FakeSubgraph,
     FakeToolCall,
+    blocking_channel,
     fake_run_stream,
+    raising_channel,
 )
 
 
@@ -470,3 +475,57 @@ class TestEmittedTurn:
         stream = fake_run_stream(messages=[FakeMessage("m1", [])])
         await translator.run(stream)
         assert translator.emitted_turn().texts == {"m1": ""}
+
+
+class TestRunAbort:
+    """The exception / cancellation branches of ``run()``: a broken or cancelled
+    run must still leave the run row terminal and close the writer, or the
+    frontend runtime binds ``isRunning`` forever."""
+
+    async def test_graph_exception_marks_run_error_and_closes(self):
+        writer = RecordingStateWriter()
+        translator = StateTranslator(writer, thread_id="t", run_id="r")
+        stream = fake_run_stream(messages=raising_channel(ValueError("boom")))
+        with pytest.raises(BaseExceptionGroup):
+            await translator.run(stream)
+        assert writer.closed
+        assert writer.last(TYPE_RUN, "run")["status"] == "error"
+
+    async def test_channel_cancel_marks_run_terminal_closes_and_propagates(self):
+        writer = RecordingStateWriter()
+        translator = StateTranslator(writer, thread_id="t", run_id="r")
+        stream = fake_run_stream(messages=raising_channel(asyncio.CancelledError()))
+        with pytest.raises(asyncio.CancelledError):
+            await translator.run(stream)
+        assert writer.closed
+        assert writer.last(TYPE_RUN, "run")["status"] == "error"
+
+    async def test_parent_cancel_marks_run_terminal_closes_and_propagates(self):
+        writer = RecordingStateWriter()
+        translator = StateTranslator(writer, thread_id="t", run_id="r")
+        stream = fake_run_stream(messages=blocking_channel())
+        task = asyncio.create_task(translator.run(stream))
+        # Let the run open (running row + start blocking) before cancelling it.
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert writer.closed
+        assert writer.last(TYPE_RUN, "run")["status"] == "error"
+
+    async def test_writer_closed_exactly_once_on_abort(self):
+        class CountingWriter(RecordingStateWriter):
+            def __init__(self) -> None:
+                super().__init__()
+                self.close_count = 0
+
+            async def close(self) -> None:
+                self.close_count += 1
+                await super().close()
+
+        writer = CountingWriter()
+        translator = StateTranslator(writer, thread_id="t", run_id="r")
+        stream = fake_run_stream(messages=raising_channel(ValueError("boom")))
+        with pytest.raises(BaseExceptionGroup):
+            await translator.run(stream)
+        assert writer.close_count == 1

@@ -90,13 +90,17 @@ def next_live_order(
     """The next free conversation-global ``order`` after ``messages`` — the start
     for a live run so resumed rows sort after history instead of jumping to the
     top. ``order`` is stamped on EVERY row (a message AND each of its tool-calls),
-    so this is the message count plus the total tool-calls — matching
+    so this is the message count plus the tool-calls — matching
     ``replay_history``'s per-row counter (one ``order`` per message then per
-    tool)."""
+    tool). Only tool-calls carrying an ``id`` are counted: ``replay_history``
+    skips id-less calls (they cannot be keyed), so counting them here would
+    overshoot the seed and leave a gap the resumed run never fills."""
     tool_calls = sum(
-        len(getattr(m, "tool_calls", None) or ())
+        1
         for m in messages
         if isinstance(m, AIMessage)
+        for call in (getattr(m, "tool_calls", None) or ())
+        if call.get("id")
     )
     return next_live_ordinal(messages, summarization_message_id_prefix) + tool_calls
 

@@ -174,6 +174,15 @@ async def iter_state_rows(
                 break
             yield frame
     finally:
-        # Surface run failures / cancellation to the caller; a clean run already
-        # finished by the time the sentinel arrived, so this just joins it.
-        await task
+        # A clean run already finished by the time the sentinel arrived, so this
+        # just joins it and surfaces any failure. But an early ``break`` (or GC of
+        # the generator) leaves the background run in flight — cancel it so it
+        # stops burning LLM/tool cost instead of orphaning it.
+        if task.done():
+            await task
+        else:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass

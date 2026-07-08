@@ -91,6 +91,13 @@ _REASONING_FLUSH_CHARS = 24
 # the client can restore finer-grained rendering with its own smoothing. Tunable.
 _CHUNK_FLUSH_CHARS = 80
 
+# Backstop for draining a tool's ``output_deltas`` before landing its result. A
+# wedged output stream would otherwise never close, blocking the enclosing
+# ``TaskGroup`` (and so ``_finalise`` + ``writer.close()``) forever. Mirrors the
+# bounded-wait the subagent-link await uses; on timeout we stop draining and
+# proceed to write the result with whatever settled.
+_TOOL_OUTPUT_DRAIN_TIMEOUT = 30.0
+
 
 def _now_ms() -> int:
     """Epoch-millis wall-clock for a message row's ``createdAt`` (display order /
@@ -150,7 +157,14 @@ class EmittedTurn:
 
 
 class StateTranslator:
-    """Translate an :class:`AsyncGraphRunStream` to state-protocol row upserts."""
+    """Translate an :class:`AsyncGraphRunStream` to state-protocol row upserts.
+
+    One translator writes one conversation's stream at a time. The ``order`` /
+    ``ordinal`` counters live on the instance, so two translators driving the
+    SAME conversation concurrently mint independent sequences and collide on the
+    shared row keys. Serialise runs per conversation (single writer at a time);
+    a resumed run seeds its counters past prior history via ``set_order_start`` /
+    ``set_ordinal_start`` rather than running alongside the previous one."""
 
     def __init__(
         self,
@@ -311,19 +325,32 @@ class StateTranslator:
                     tg.create_task(self._run_channel(self._stream_subgraphs(stream)))
                     tg.create_task(self._run_channel(self._stream_values(stream)))
         except asyncio.CancelledError:
-            self._errored = True
+            # A cancel must still leave the run row terminal and close the stream,
+            # or the frontend runtime binds ``isRunning`` forever. The run schema's
+            # status enum has no ``cancelled``, so reuse the ``error`` terminal path
+            # (clears ``isRunning``) and carry the cancel reason in the message.
+            await self._abort_run("error", message="cancelled")
             raise
         except Exception as exc:
             if _has_channel_cancelled(exc):
-                self._errored = True
+                await self._abort_run("error", message="cancelled")
                 raise asyncio.CancelledError from exc
             logger.exception("state translator caught graph exception")
-            self._errored = True
-            await self._set_run("error", interrupt={"message": _exception_message(exc)})
-            await self.writer.close()
+            await self._abort_run("error", message=_exception_message(exc))
             raise
         finally:
             await self._finalise(stream, pre_finish=pre_finish)
+
+    async def _abort_run(self, status: str, *, message: str | None = None) -> None:
+        """Write the terminal run row and close the writer exactly once on an
+        aborted run (cancellation or graph exception). Sets ``_errored`` so the
+        ``finally`` ``_finalise`` no-ops and the writer is never closed twice."""
+        if self._errored:
+            return
+        self._errored = True
+        interrupt = {"message": message} if message is not None else None
+        await self._set_run(status, interrupt=interrupt)
+        await self.writer.close()
 
     async def _run_channel(self, awaitable: Any) -> None:
         try:
@@ -552,6 +579,23 @@ class StateTranslator:
         tools need no reconciliation handle (nothing writes them optimistically)."""
         return tool_call_id if tool_name in INTERRUPT_TOOL_NAMES else None
 
+    async def _drain_output_deltas(self, tc: Any) -> None:
+        """Consume a tool's streamed output deltas to completion, bounded so a
+        wedged stream can't hang the run. On timeout, stop draining and proceed
+        to land the result with whatever has settled."""
+
+        async def _drain() -> None:
+            async for _ in tc.output_deltas:
+                pass
+
+        try:
+            await asyncio.wait_for(_drain(), timeout=_TOOL_OUTPUT_DRAIN_TIMEOUT)
+        except TimeoutError:
+            logger.warning(
+                "tool %s: output_deltas drain timed out; landing result early",
+                getattr(tc, "tool_call_id", "?"),
+            )
+
     async def _consume_tool_call_execution(self, tc: Any) -> None:
         tool_name = to_ag_ui_tool_name(tc.tool_name)
         args_text = to_ag_ui_json(tc.input) if tc.input else ""
@@ -576,12 +620,11 @@ class StateTranslator:
                 "order": order,
             },
         )
-        async for _ in tc.output_deltas:
-            pass
+        await self._drain_output_deltas(tc)
         # An interrupted tool (ask_question raising GraphInterrupt) is paused, not
         # failed — the run row's interrupt status carries it; the resumed run
-        # upserts the real result. The error arrives wrapped/stringified, so use
-        # the same robust detector is_interrupt_error provides.
+        # upserts the real result. Detected on the exception TYPE, never a
+        # stringified error, so a genuine failure isn't mistaken for a pause.
         if is_interrupt_error(tc.error):
             return
         is_error = bool(tc.error)
@@ -846,8 +889,7 @@ class StateTranslator:
                 "order": order,
             },
         )
-        async for _ in tc.output_deltas:
-            pass
+        await self._drain_output_deltas(tc)
         if is_interrupt_error(tc.error):
             return
         is_error = bool(tc.error)

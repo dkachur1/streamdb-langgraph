@@ -19,16 +19,15 @@ def is_interrupt_error(error: object) -> bool:
     """True if ``error`` is (or wraps) a LangGraph interrupt.
 
     A tool that raises ``GraphInterrupt`` (ask_question / request_review) is
-    *paused*, not failed — but the error reaches the tool stream wrapped: a bare
-    ``GraphInterrupt``, a bare ``Interrupt`` value, a tuple of ``Interrupt`` (the
-    exception's ``args``), or a ``BaseExceptionGroup``. ``isinstance(error,
-    GraphInterrupt)`` alone misses the wrapped forms, which leaks an ``isError``
-    tool result carrying the interrupt payload and flashes the card red.
+    *paused*, not failed. Classify strictly on the exception TYPE — a bare
+    ``GraphInterrupt`` / ``Interrupt``, a tuple of ``Interrupt`` (the exception's
+    ``args``), or a ``BaseExceptionGroup`` wrapping one. A stringified error is
+    deliberately NOT matched: substring-matching ``"Interrupt(value="`` on a
+    message string misclassifies a genuine tool failure that merely quotes that
+    text as a paused interrupt, stranding the tool card with no result/error.
     """
     if isinstance(error, (GraphInterrupt, Interrupt)):
         return True
-    if isinstance(error, str):
-        return "Interrupt(value=" in error
     if isinstance(error, BaseExceptionGroup):
         return any(is_interrupt_error(exc) for exc in error.exceptions)
     if isinstance(error, (tuple, list)):

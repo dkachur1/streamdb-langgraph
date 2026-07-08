@@ -2,13 +2,45 @@
 
 from __future__ import annotations
 
+from langgraph.errors import GraphInterrupt
 from langgraph.types import Interrupt
 
 from streamdb_langgraph.interrupts import (
     ag_ui_interrupt_reason,
     ag_ui_interrupt_rows,
+    is_interrupt_error,
     langgraph_interrupt_to_ag_ui_interrupt,
 )
+
+
+class TestIsInterruptError:
+    """Interrupt detection keys off the exception TYPE, not a message substring,
+    so a genuine tool failure that merely quotes ``Interrupt(value=`` is not
+    mistaken for a paused interrupt (which would strand the tool card)."""
+
+    def test_graph_interrupt_is_interrupt(self):
+        gi = GraphInterrupt((Interrupt(value={"type": "ask_question"}, id="i1"),))
+        assert is_interrupt_error(gi) is True
+
+    def test_bare_interrupt_is_interrupt(self):
+        interrupt = Interrupt(value={"type": "ask_question"}, id="i")
+        assert is_interrupt_error(interrupt) is True
+
+    def test_wrapped_forms_are_interrupt(self):
+        interrupt = Interrupt(value={"type": "ask_question"}, id="i")
+        group = BaseExceptionGroup("g", [GraphInterrupt((interrupt,))])
+        assert is_interrupt_error((interrupt,)) is True
+        assert is_interrupt_error(group) is True
+
+    def test_lookalike_error_string_is_not_interrupt(self):
+        # A real tool error whose message quotes the interrupt repr must NOT be
+        # classified as a pause — it needs its error result written.
+        assert is_interrupt_error("boom: Interrupt(value={'x': 1}, id='y')") is False
+
+    def test_plain_error_and_none_are_not_interrupt(self):
+        assert is_interrupt_error("tool blew up") is False
+        assert is_interrupt_error(None) is False
+        assert is_interrupt_error(ValueError("nope")) is False
 
 
 class TestInterruptReason:

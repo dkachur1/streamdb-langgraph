@@ -6,6 +6,8 @@ Both are driven over a scripted stream (``make_run_stream`` monkeypatched to a
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -16,7 +18,12 @@ from streamdb_langgraph import (
     translate_turn,
 )
 from streamdb_langgraph import driver as driver_module
-from tests.fixtures import FakeMessage, FakeToolCall, fake_run_stream
+from tests.fixtures import (
+    FakeMessage,
+    FakeToolCall,
+    blocking_channel,
+    fake_run_stream,
+)
 
 
 @pytest.fixture
@@ -78,6 +85,27 @@ async def test_iter_state_rows_yields_frames_in_order(
     assert types[-1] == "run"
     assert "message" in types
     assert frames[-1]["value"]["status"] == "complete"
+
+
+async def test_iter_state_rows_early_break_cancels_background_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Breaking out of the iterator early must cancel the background run instead
+    of orphaning it — a run that never closes (blocked channel) would otherwise
+    hang the ``finally`` join forever. The ``wait_for`` guards against that."""
+
+    async def _fake_make_run_stream(graph, graph_input, **kwargs):  # noqa: ANN001, ANN003
+        # A channel that never ends → the run never reaches its CLOSED sentinel.
+        return fake_run_stream(values=blocking_channel())
+
+    monkeypatch.setattr(driver_module, "make_run_stream", _fake_make_run_stream)
+
+    agen = iter_state_rows(object(), {"messages": []}, thread_id="conv-1")
+    first = await asyncio.wait_for(agen.__anext__(), timeout=1)
+    assert first["type"] == "run"
+    # Early break: closing the generator runs its finally, which must cancel the
+    # still-running drive task (not await it) — so aclose returns, doesn't hang.
+    await asyncio.wait_for(agen.aclose(), timeout=1)
 
 
 def _messages(frames: list[dict[str, object]]) -> list[dict[str, object]]:

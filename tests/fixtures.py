@@ -19,6 +19,21 @@ async def _aiter(items: Iterable[Any]) -> AsyncIterator[Any]:
         yield item
 
 
+async def raising_channel(exc: BaseException) -> AsyncIterator[Any]:
+    """A channel that raises ``exc`` the first time it is iterated — drives the
+    translator's exception / cancellation branches (pass a ``ValueError`` for a
+    graph exception, a bare ``asyncio.CancelledError`` for a channel cancel)."""
+    raise exc
+    yield  # pragma: no cover - makes this an async generator
+
+
+async def blocking_channel() -> AsyncIterator[Any]:
+    """A channel that blocks forever — lets a test cancel the run mid-flight to
+    exercise the parent-cancellation path."""
+    await asyncio.Event().wait()
+    yield  # pragma: no cover - never reached
+
+
 def _as_aiter(items: Iterable[Any] | AsyncIterator[Any]) -> AsyncIterator[Any]:
     if hasattr(items, "__anext__"):
         return items  # type: ignore[return-value]
